@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from app.controllers.v1 import llm as llm_controller
 from app.models.schema import (
     VideoScriptRequest,
+    VideoStoryboardRequest,
     VideoSocialMetadataRequest,
     VideoTermsRequest,
 )
@@ -108,6 +109,36 @@ class TestLlmController(unittest.TestCase):
             video_script="Morning coffee.",
             language="en",
             platform="youtube_shorts",
+        )
+
+    def test_generate_video_storyboard_forwards_storyboard_inputs(self):
+        body = VideoStoryboardRequest(
+            video_subject="Coffee",
+            video_script="Beans are roasted, then brewed.",
+            scene_count=2,
+        )
+        scenes = [
+            {
+                "id": "scene_1",
+                "narration": "Roasting beans.",
+                "target_duration": 4.0,
+                "visual_prompt": "Close-up of coffee beans roasting",
+                "search_keywords": ["coffee roasting"],
+            }
+        ]
+
+        with patch.object(
+            llm_controller.llm,
+            "generate_storyboard",
+            return_value=scenes,
+        ) as generate:
+            response = llm_controller.generate_video_storyboard(None, body)
+
+        self.assertEqual(response, {"status": 200, "data": {"scenes": scenes}})
+        generate.assert_called_once_with(
+            video_subject="Coffee",
+            video_script="Beans are roasted, then brewed.",
+            scene_count=2,
         )
 
 

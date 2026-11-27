@@ -17,6 +17,7 @@ from openai import AzureOpenAI, OpenAI
 from openai.types.chat import ChatCompletion
 
 from app.config import config
+from app.models.schema import StoryboardScene
 from app.models.llm_provider import DEFAULT_LLM_PROVIDER_ID, get_llm_provider
 from app.utils import utils
 from app.utils.request_logging import trace_sdk_call
@@ -1261,6 +1262,84 @@ def generate_terms(
 
     logger.success(f"completed: \n{search_terms}")
     return search_terms
+
+
+def _validate_storyboard_scenes(payload) -> List[dict]:
+    if not isinstance(payload, list) or not payload:
+        raise ValueError("storyboard scenes must be a non-empty JSON array")
+
+    scenes = [StoryboardScene.model_validate(scene) for scene in payload]
+    ids = [scene.id for scene in scenes]
+    if len(set(ids)) != len(ids):
+        raise ValueError("storyboard scene IDs must be unique")
+    return [scene.model_dump(mode="json") for scene in scenes]
+
+
+def generate_storyboard(
+    video_subject: str,
+    video_script: str = "",
+    scene_count: int = 5,
+    app_config=None,
+) -> List[dict]:
+    prompt = f"""
+# Role: Storyboard Generator
+
+## Goal
+Generate an ordered storyboard for a short video.
+
+## Constraints
+1. Return ONLY a valid JSON array.
+2. The array must contain exactly {scene_count} scene objects in chronological order.
+3. Every scene object must include exactly these keys:
+   - "id" (short stable identifier)
+   - "narration" (spoken line for the scene)
+   - "target_duration" (seconds, number > 0)
+   - "visual_prompt" (image/video generation prompt)
+   - "search_keywords" (JSON array of English keyword strings)
+4. "search_keywords" must be English only and contain no empty strings.
+5. Do not return markdown, code fences, explanations, or extra fields.
+
+## Context
+### Video Subject
+{video_subject}
+
+### Video Script
+{utils.remove_pause_tags(video_script or "").strip()}
+""".strip()
+
+    scenes: List[dict] = []
+    response = ""
+    for i in range(_max_retries):
+        try:
+            with _json_answer():
+                if app_config is None:
+                    response = _generate_response(prompt)
+                else:
+                    response = _generate_response(prompt, app_config=app_config)
+            if isinstance(response, str) and response.startswith("Error: "):
+                logger.error(f"failed to generate storyboard: {response}")
+                return []
+
+            payload = json.loads(_strip_code_fence(response))
+            if isinstance(payload, dict) and "scenes" in payload:
+                payload = payload["scenes"]
+            scenes = _validate_storyboard_scenes(payload)
+        except Exception as e:
+            logger.warning(f"failed to generate storyboard: {str(e)}")
+            if response:
+                try:
+                    payload = _extract_embedded_json(response, "[")
+                    scenes = _validate_storyboard_scenes(payload)
+                except Exception as nested_error:
+                    logger.warning(f"failed to recover storyboard JSON: {nested_error}")
+
+        if scenes:
+            break
+        if i < _max_retries - 1:
+            logger.warning(f"failed to generate storyboard, trying again... {i + 1}")
+
+    logger.success(f"completed storyboard scenes: {len(scenes)}")
+    return scenes
 
 
 # =============================================================================

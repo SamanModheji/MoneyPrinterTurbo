@@ -205,6 +205,26 @@ def _reject_blank_request_script(value: str) -> str:
 RequestScript = Annotated[str, AfterValidator(_reject_blank_request_script)]
 
 
+def _reject_blank_storyboard_text(value: str) -> str:
+    text = value.strip()
+    if not text:
+        raise ValueError("cannot be blank")
+    return text
+
+
+def _validate_storyboard_keyword(value: str) -> str:
+    keyword = value.strip()
+    if not keyword:
+        raise ValueError("cannot be blank")
+    if not keyword.isascii() or not any("a" <= ch.lower() <= "z" for ch in keyword):
+        raise ValueError("must be English text")
+    return keyword
+
+
+StoryboardText = Annotated[str, AfterValidator(_reject_blank_storyboard_text)]
+StoryboardKeyword = Annotated[str, AfterValidator(_validate_storyboard_keyword)]
+
+
 class SubtitleRequest(BaseModel):
     video_script: RequestScript
     video_language: Optional[str] = ""
@@ -296,6 +316,28 @@ class VideoSocialMetadataParams:
     platform: Optional[str] = Field(default="tiktok", max_length=64)
 
 
+class VideoStoryboardParams:
+    """
+    {
+      "video_subject": "Morning routine",
+      "video_script": "",
+      "scene_count": 5
+    }
+    """
+
+    video_subject: Optional[str] = Field(default="Morning routine", max_length=500)
+    video_script: Optional[str] = Field(default="", max_length=8000)
+    scene_count: int = Field(default=5, ge=1, le=20)
+
+
+class StoryboardScene(BaseModel):
+    id: StoryboardText = Field(max_length=120)
+    narration: StoryboardText = Field(max_length=100000)
+    target_duration: float = Field(gt=0, le=3600, allow_inf_nan=False)
+    visual_prompt: StoryboardText = Field(max_length=2000)
+    search_keywords: List[StoryboardKeyword] = Field(min_length=1, max_length=12)
+
+
 class TaskVideoRequest(VideoParams, BaseModel):
     # Bound API resource requests while leaving the CLI's explicit batch and
     # FFmpeg thread controls in VideoParams unchanged.
@@ -336,6 +378,10 @@ class VideoTermsRequest(VideoTermsParams, BaseModel):
 
 
 class VideoSocialMetadataRequest(VideoSocialMetadataParams, BaseModel):
+    pass
+
+
+class VideoStoryboardRequest(VideoStoryboardParams, BaseModel):
     pass
 
 
@@ -393,6 +439,10 @@ class VideoSocialMetadataData(BaseModel):
     title: str
     caption: str
     hashtags: List[str]
+
+
+class VideoStoryboardData(BaseModel):
+    scenes: List[StoryboardScene]
 
 
 class FileData(BaseModel):
@@ -558,6 +608,30 @@ class VideoSocialMetadataResponse(BaseResponse):
                     "title": "A Day in Shanghai You Should Not Miss",
                     "caption": "Save this quick Shanghai inspiration and follow for more short travel ideas.",
                     "hashtags": ["#shorts", "#travel", "#shanghai", "#viral", "#fyp"],
+                },
+            },
+        }
+    )
+
+
+class VideoStoryboardResponse(BaseResponse):
+    data: VideoStoryboardData
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "status": 200,
+                "message": "success",
+                "data": {
+                    "scenes": [
+                        {
+                            "id": "scene_1",
+                            "narration": "A calm city wakes up at sunrise.",
+                            "target_duration": 5.0,
+                            "visual_prompt": "Cinematic sunrise over a quiet city skyline",
+                            "search_keywords": ["city sunrise", "quiet skyline"],
+                        }
+                    ]
                 },
             },
         }

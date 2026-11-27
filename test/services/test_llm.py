@@ -23,7 +23,11 @@ from app.models.llm_provider import (
     get_llm_provider,
     normalize_provider_override,
 )
-from app.models.schema import VideoScriptRequest, VideoSocialMetadataRequest
+from app.models.schema import (
+    VideoScriptRequest,
+    VideoSocialMetadataRequest,
+    VideoStoryboardRequest,
+)
 from app.services import llm
 
 RUN_INTEGRATION_TESTS = os.environ.get("MPT_RUN_INTEGRATION_TESTS", "").lower() in {
@@ -332,6 +336,107 @@ class TestScriptPromptOptions(unittest.TestCase):
 
         self.assertEqual(result, ["coffee beans", "barista tools"])
         self.assertEqual(generate_response.call_count, 2)
+
+    def test_generate_storyboard_rejects_malformed_json(self):
+        with patch.object(llm, "_generate_response", return_value="not json"):
+            result = llm.generate_storyboard(
+                video_subject="Coffee",
+                video_script="From beans to brew.",
+                scene_count=2,
+            )
+
+        self.assertEqual(result, [])
+
+    def test_generate_storyboard_retries_empty_scenes(self):
+        with patch.object(
+            llm,
+            "_generate_response",
+            side_effect=[
+                "[]",
+                json.dumps(
+                    [
+                        {
+                            "id": "scene_1",
+                            "narration": "Show sunrise over city.",
+                            "target_duration": 4.5,
+                            "visual_prompt": "Sunrise over downtown skyline",
+                            "search_keywords": ["city sunrise"],
+                        }
+                    ]
+                ),
+            ],
+        ) as generate_response:
+            result = llm.generate_storyboard(
+                video_subject="Morning routine",
+                video_script="Wake up and walk outside.",
+                scene_count=1,
+            )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(generate_response.call_count, 2)
+
+    def test_generate_storyboard_retries_invalid_duration_and_keywords(self):
+        with patch.object(
+            llm,
+            "_generate_response",
+            side_effect=[
+                json.dumps(
+                    [
+                        {
+                            "id": "scene_1",
+                            "narration": "Invalid scene duration.",
+                            "target_duration": 0,
+                            "visual_prompt": "Bad duration prompt",
+                            "search_keywords": ["city sunrise"],
+                        }
+                    ]
+                ),
+                json.dumps(
+                    [
+                        {
+                            "id": "scene_1",
+                            "narration": "Corrected storyboard scene.",
+                            "target_duration": 5.0,
+                            "visual_prompt": "Wide shot of city at sunrise",
+                            "search_keywords": ["city sunrise", "morning street"],
+                        }
+                    ]
+                ),
+            ],
+        ) as generate_response:
+            result = llm.generate_storyboard(
+                video_subject="Morning routine",
+                video_script="Wake up and walk outside.",
+                scene_count=1,
+            )
+
+        self.assertEqual(result[0]["target_duration"], 5.0)
+        self.assertEqual(result[0]["search_keywords"], ["city sunrise", "morning street"])
+        self.assertEqual(generate_response.call_count, 2)
+
+    def test_storyboard_request_and_scene_validation(self):
+        payload = VideoStoryboardRequest(
+            video_subject="Coffee",
+            video_script="Beans are roasted then brewed.",
+            scene_count=2,
+        )
+        self.assertEqual(payload.scene_count, 2)
+
+        with self.assertRaises(ValueError):
+            llm._validate_storyboard_scenes([])
+
+        with self.assertRaises(ValidationError):
+            llm._validate_storyboard_scenes(
+                [
+                    {
+                        "id": "scene_1",
+                        "narration": "Test",
+                        "target_duration": 4.0,
+                        "visual_prompt": "Test",
+                        "search_keywords": ["咖啡"],
+                    }
+                ]
+            )
 
     def test_video_script_request_rejects_invalid_advanced_options(self):
         """
@@ -2897,6 +3002,71 @@ class TestSocialMetadata(unittest.TestCase):
                     "title": "3 Quiet Tokyo Coffee Shops",
                     "caption": "Save these spots for your next Tokyo morning.",
                     "hashtags": ["#Tokyo", "#Coffee", "#Shorts"],
+                },
+            },
+        )
+
+    def test_storyboard_endpoint_response_shape(self):
+        from fastapi.testclient import TestClient
+
+        from app.asgi import app
+
+        request_body = {
+            "video_subject": "Tokyo coffee shops",
+            "video_script": "Start with streets, then coffee brewing.",
+            "scene_count": 2,
+        }
+        llm_response = json.dumps(
+            [
+                {
+                    "id": "scene_1",
+                    "narration": "Morning street walk.",
+                    "target_duration": 4.0,
+                    "visual_prompt": "Cinematic Tokyo street in the morning",
+                    "search_keywords": ["tokyo street", "morning walk"],
+                },
+                {
+                    "id": "scene_2",
+                    "narration": "Pour-over coffee close-up.",
+                    "target_duration": 5.0,
+                    "visual_prompt": "Barista making pour-over coffee close-up",
+                    "search_keywords": ["pour over coffee", "barista close up"],
+                },
+            ]
+        )
+
+        with patch.object(llm, "_generate_response", return_value=llm_response):
+            response = TestClient(app).post(
+                "/api/v1/storyboard",
+                json=request_body,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {
+                "status": 200,
+                "message": "success",
+                "data": {
+                    "scenes": [
+                        {
+                            "id": "scene_1",
+                            "narration": "Morning street walk.",
+                            "target_duration": 4.0,
+                            "visual_prompt": "Cinematic Tokyo street in the morning",
+                            "search_keywords": ["tokyo street", "morning walk"],
+                        },
+                        {
+                            "id": "scene_2",
+                            "narration": "Pour-over coffee close-up.",
+                            "target_duration": 5.0,
+                            "visual_prompt": "Barista making pour-over coffee close-up",
+                            "search_keywords": [
+                                "pour over coffee",
+                                "barista close up",
+                            ],
+                        },
+                    ]
                 },
             },
         )
