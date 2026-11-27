@@ -1264,7 +1264,7 @@ def generate_terms(
     return search_terms
 
 
-def _validate_storyboard_scenes(payload) -> List[dict]:
+def _validate_storyboard_scenes(payload, expected_count: int | None = None) -> List[dict]:
     if not isinstance(payload, list) or not payload:
         raise ValueError("storyboard scenes must be a non-empty JSON array")
 
@@ -1272,6 +1272,10 @@ def _validate_storyboard_scenes(payload) -> List[dict]:
     ids = [scene.id for scene in scenes]
     if len(set(ids)) != len(ids):
         raise ValueError("storyboard scene IDs must be unique")
+    if expected_count is not None and len(scenes) != expected_count:
+        raise ValueError(
+            f"storyboard scene count must be exactly {expected_count}, got {len(scenes)}"
+        )
     return [scene.model_dump(mode="json") for scene in scenes]
 
 
@@ -1323,13 +1327,15 @@ Generate an ordered storyboard for a short video.
             payload = json.loads(_strip_code_fence(response))
             if isinstance(payload, dict) and "scenes" in payload:
                 payload = payload["scenes"]
-            scenes = _validate_storyboard_scenes(payload)
+            scenes = _validate_storyboard_scenes(payload, expected_count=scene_count)
         except Exception as e:
             logger.warning(f"failed to generate storyboard: {str(e)}")
             if response:
                 try:
                     payload = _extract_embedded_json(response, "[")
-                    scenes = _validate_storyboard_scenes(payload)
+                    scenes = _validate_storyboard_scenes(
+                        payload, expected_count=scene_count
+                    )
                 except Exception as nested_error:
                     logger.warning(f"failed to recover storyboard JSON: {nested_error}")
 

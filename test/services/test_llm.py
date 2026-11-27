@@ -414,6 +414,51 @@ class TestScriptPromptOptions(unittest.TestCase):
         self.assertEqual(result[0]["search_keywords"], ["city sunrise", "morning street"])
         self.assertEqual(generate_response.call_count, 2)
 
+    def test_generate_storyboard_retries_scene_count_mismatch(self):
+        with patch.object(
+            llm,
+            "_generate_response",
+            side_effect=[
+                json.dumps(
+                    [
+                        {
+                            "id": "scene_1",
+                            "narration": "Only one scene returned.",
+                            "target_duration": 5.0,
+                            "visual_prompt": "City sunrise",
+                            "search_keywords": ["city sunrise"],
+                        }
+                    ]
+                ),
+                json.dumps(
+                    [
+                        {
+                            "id": "scene_1",
+                            "narration": "Opening city view.",
+                            "target_duration": 5.0,
+                            "visual_prompt": "City sunrise wide shot",
+                            "search_keywords": ["city sunrise"],
+                        },
+                        {
+                            "id": "scene_2",
+                            "narration": "Coffee close-up.",
+                            "target_duration": 4.0,
+                            "visual_prompt": "Coffee cup close-up",
+                            "search_keywords": ["coffee close up"],
+                        },
+                    ]
+                ),
+            ],
+        ) as generate_response:
+            result = llm.generate_storyboard(
+                video_subject="Morning routine",
+                video_script="Walk outside then drink coffee.",
+                scene_count=2,
+            )
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual(generate_response.call_count, 2)
+
     def test_storyboard_request_and_scene_validation(self):
         payload = VideoStoryboardRequest(
             video_subject="Coffee",
