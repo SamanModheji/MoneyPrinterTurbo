@@ -6,6 +6,8 @@ from app.models.exception import HttpException
 from app.models.schema import (
     VideoScriptRequest,
     VideoScriptResponse,
+    VideoStoryboardRequest,
+    VideoStoryboardResponse,
     VideoSocialMetadataRequest,
     VideoSocialMetadataResponse,
     VideoTermsRequest,
@@ -77,3 +79,22 @@ def generate_video_social_metadata(
         platform=body.platform,
     )
     return utils.get_response(200, metadata)
+
+
+@router.post(
+    "/storyboard",
+    response_model=VideoStoryboardResponse,
+    summary="Generate ordered storyboard scenes for a video",
+)
+def generate_video_storyboard(request: Request, body: VideoStoryboardRequest):
+    scenes = llm.generate_storyboard(
+        video_subject=body.video_subject,
+        video_script=body.video_script,
+        scene_count=body.scene_count,
+    )
+    if not scenes:
+        raise HttpException(
+            task_id=base.get_task_id(request), status_code=503,
+            message="storyboard generation is unavailable",
+        )
+    return utils.get_response(200, {"scenes": scenes})
